@@ -44,6 +44,7 @@ https://github.com/mengbaiyoudianxian/astrbot_plugin_dafeiyu_impulse
 | `w_bili` | 权重：刷B站 |  |
 | `w_tieba` | 权重：逛贴吧 |  |
 | `w_profile` | 权重：看看自己的资料（可能顺手改） |  |
+| `w_addfriend` | 念头权重：想加个好友 | 从她有好感、聊过 6 次以上、还不是好友的群友里挑；先告诉主人再发申请 |
 | `w_idle` | 权重：发会儿呆（什么都不做） |  |
 | `cap_owner` | 每天最多主动找主人几次（没回的才算） | 主人回了的那次不占名额，一直有回应就不限 |
 | `cap_group` | 每天最多去群里冒泡几次（所有群加起来） | 没人接话的才算次数，有人接话的不占名额 |
@@ -52,6 +53,8 @@ https://github.com/mengbaiyoudianxian/astrbot_plugin_dafeiyu_impulse
 | `cap_bili` | 每天最多因为念头去刷B站几次 | 不算B站插件自己排的时间 |
 | `cap_tieba` | 每天最多因为念头去逛贴吧几次 | 不算贴吧插件自己排的时间 |
 | `cap_profile` | 每天最多看几次自己的资料 |  |
+| `cap_addfriend` | 每天最多主动加几个好友 |  |
+| `addfriend_min_affection` | 主动加好友的最低好感 |  |
 | `per_group_daily` | 同一个群每天最多被她主动找几次（没人接话的才算） |  |
 | `group_cooldown_hours` | 同一个群两次主动之间至少隔几小时 | 上次有人接话就不用等 |
 | `friend_cooldown_hours` | 同一个好友两次主动之间至少隔几小时 | 上次对方回了就不用等 |

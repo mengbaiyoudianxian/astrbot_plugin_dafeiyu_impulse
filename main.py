@@ -82,6 +82,7 @@ EVENTS = {
     "bili": ("刷B站", "w_bili", "cap_bili"),
     "tieba": ("逛贴吧", "w_tieba", "cap_tieba"),
     "profile": ("看看自己的资料", "w_profile", "cap_profile"),
+    "addfriend": ("想加个好友", "w_addfriend", "cap_addfriend"),
     "idle": ("发会儿呆", "w_idle", ""),
 }
 
@@ -1811,6 +1812,143 @@ class DafeiyuImpulse(Star):
         except Exception:
             pass
         return self._req_brief() or "最近没有好友申请和群邀请。"
+
+
+    # ---------- 主动加好友 ----------
+
+    async def _friend_ids(self):
+        try:
+            return {str(f.get("user_id")) for f in (await self._call("get_friend_list", no_cache=True) or [])}
+        except Exception:
+            return set()
+
+    async def _add_friend(self, uid, msg, gid=""):
+        """发好友申请。QQ 内核 reqToAddFriends 的参数没实测过：几种格式依次试，记下每次返回。返回 (成功?, 说明)。"""
+        try:
+            conv = await self._call("dafeiyu_kernel", service="getUixConvertService", method="getUid", args=[[int(uid)]])
+            nt = ""
+            if isinstance(conv, dict):
+                um = conv.get("uidInfo") or conv
+                nt = str(um.get(str(uid)) or um.get(int(uid)) or "") if isinstance(um, dict) else ""
+            if not nt:
+                nt = str(await self._call("dafeiyu_kernel", service="getProfileService", method="getUidByUin",
+                                          args=["FriendsServiceImpl", [str(uid)]]) or "")
+                m = re.search(r"u_[\w-]+", nt)
+                nt = m.group() if m else ""
+        except Exception as e:
+            return False, f"查不到对方的内部 ID：{_clip(e, 80)}"
+        if not nt:
+            return False, "查不到对方的内部 ID"
+        src = 3004 if gid else 3999
+        shapes = [
+            {"friendUid": nt, "reqMsg": msg, "remark": "", "groupCode": str(gid or ""), "sourceId": src, "sourceSubId": 0, "addSource": "", "extInfo": ""},
+            {"friendUid": nt, "verify": msg, "remark": "", "groupCode": str(gid or ""), "sourceId": src, "sourceSubId": 0},
+            {"friendUid": nt, "reqMsg": msg, "sourceId": src, "groupCode": str(gid or "")},
+        ]
+        tried = []
+        for i, p in enumerate(shapes):
+            try:
+                res = await self._call("dafeiyu_kernel", service="getBuddyService", method="reqToAddFriends", args=[p])
+            except Exception as e:
+                res = {"error": str(e)}
+            tried.append(f"#{i + 1} {_clip(json.dumps(res, ensure_ascii=False, default=str), 120)}")
+            logger.info(f"[dafeiyu_impulse] reqToAddFriends 格式{i + 1} → {res}")
+            code = res.get("result", res.get("retCode", res.get("code"))) if isinstance(res, dict) else None
+            if code == 0 and not (isinstance(res, dict) and res.get("error")):
+                return True, f"申请发出去了（格式{i + 1}）"
+        return False, "QQ 没让发：" + "；".join(tried)
+
+    def _heart(self):
+        return self._star("astrbot_plugin_dafeiyu_heart")
+
+    async def _ev_addfriend(self):
+        heart = self._heart()
+        if heart is None:
+            return "", ""
+        me, owner = await self._uin(), self._owner_qq()
+        friends = await self._friend_ids()
+        users, bufs = heart.data.get("users", {}), heart.data.get("bufs", {})
+        min_aff = float(self.conf.get("addfriend_min_affection") or 55)
+        cands = []
+        for uid, u in users.items():
+            if uid in friends or uid in (me, owner) or not uid.isdigit():
+                continue
+            lines = (bufs.get(uid) or {}).get("lines") or []
+            if u.get("count", 0) < 6 or not any(x.get("at") != "私聊" for x in lines):
+                continue
+            if self.affection_of(heart, uid) < min_aff or not self._cool(f"af{uid}", 14 * 24):
+                continue
+            cands.append(uid)
+        if not cands:
+            return "", ""
+        uid = self._pick_by_affection(cands)
+        u = users[uid]
+        lines = (bufs.get(uid) or {}).get("lines") or []
+        gname = next((x["at"] for x in reversed(lines) if x.get("at") != "私聊"), "群里")
+        gid = next((g for g, v in (heart.data.get("groups") or {}).items() if v.get("name") == gname), "")
+        hist = "\n".join(f"{'他' if x['w'] == '他' else '我'}：{x['x']}" for x in lines[-12:]) or "（没记下来）"
+        self._mark(f"af{uid}")
+        text = (await self._think(
+            f"群「{gname}」里的「{u['name']}」你还没加好友。你对他：综合好感 {self.affection_of(heart, uid):.0f}，印象：{u.get('impression') or '还行'}。"
+            f"你们最近在群里聊的：\n{hist}\n\n你想不想加他 QQ 好友、以后私聊？想的话，只输出好友申请里的验证消息（20 字内，像真人，比如「群里那个爱吐槽的鱼」）；"
+            "不想就只输出 SKIP。", "想加好友"))
+        text = _clip(text, 30)
+        if not text:
+            return u["name"], ""
+        return u["name"], await self._do_add(uid, u["name"], text, gid, "自己想加")
+
+    @staticmethod
+    def affection_of(heart, uid):
+        try:
+            return float(heart.affection(uid))
+        except Exception:
+            return 40.0
+
+    async def _do_add(self, uid, name, msg, gid, why):
+        await self._tell_owner(f"我想加「{name}」（{uid}）好友，验证消息写的「{msg}」（{why}）")
+        ok, note = await self._add_friend(uid, msg, gid)
+        self._log("addfriend", f"{name}({uid})", f"{'发了好友申请' if ok else '加好友没成'}：{msg}｜{note}", ok=ok)
+        if not ok:
+            await self._tell_owner(f"加「{name}」没成：{_clip(note, 200)}")
+        return f"想加好友「{msg}」→ {note}"
+
+    @filter.llm_tool(name="add_qq_friend")
+    async def tool_add_friend(self, event: AstrMessageEvent, who: str = "", message: str = ""):
+        """你自己想加某个人 QQ 好友时用（比如群里聊得来、想以后私聊）。加不加你自己决定；别人只是嚷着让你加他，你不想就不加。
+        会先告诉主人一声再发申请。
+
+        Args:
+            who(string): 对方的 QQ 号或昵称；不填就是眼前这个人
+            message(string): 好友申请里的验证消息，20 字内，像真人写的
+        """
+        heart = self._heart()
+        w = str(who or "").strip().lstrip("@")
+        uid = ""
+        if not w:
+            uid = str(event.get_sender_id())
+        elif w.isdigit():
+            uid = w
+        elif heart is not None:
+            ids = heart._find(w)
+            if len(ids) == 1:
+                uid = ids[0]
+            elif ids:
+                return "重名了：" + "、".join(f"{heart.data['users'][i]['name']}({i})" for i in ids)
+        if not uid:
+            return f"不知道「{w}」是谁，要 QQ 号。"
+        if uid in await self._friend_ids():
+            return "你们已经是好友了。"
+        if uid in (await self._uin(), self._owner_qq()):
+            return "不用加。"
+        if self._cap_left("addfriend") <= 0:
+            return "今天已经加过好几个人了，明天再说。"
+        if not self._cool(f"af{uid}", 14 * 24):
+            return "前阵子刚加过他，等等再说。"
+        self._mark(f"af{uid}")
+        self._bump("addfriend")
+        name = (heart.data["users"].get(uid, {}).get("name") if heart else "") or event.get_sender_name() or uid
+        gid = "" if event.is_private_chat() else str(event.get_group_id() or "")
+        return await self._do_add(uid, name, _clip(message or "群里认识的~", 30), gid, "聊天时自己想加")
 
     @filter.llm_tool(name="join_qq_group")
     async def tool_join_group(self, event: AstrMessageEvent, group_id: str, note: str = ""):
